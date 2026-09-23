@@ -13,14 +13,30 @@ npm install react-native-screen-gradient
 ## Usage
 
 
-```js
-import { ScreenGradientView } from "react-native-screen-gradient";
+```tsx
+import { ScreenGradient, GradientView } from "react-native-screen-gradient";
 
-// ...
-
-<ScreenGradientView color="tomato" />
+<ScreenGradient
+  colors={["#ff0000", "#ffff00"]}
+  locations={[0, 1]}
+  start={{ x: 0, y: 0 }}
+  end={{ x: 0, y: 1 }}
+  style={{ flex: 1 }}
+>
+  <ScrollView>
+    <GradientView>
+      <Text>Hello</Text>
+    </GradientView>
+  </ScrollView>
+</ScreenGradient>
 ```
 
+`ScreenGradient` defines one gradient in the coordinates of its own viewport
+(`start`/`end` are fractions of its width/height). Every `GradientView` inside it
+shows the part of that gradient that lies under its current on-screen position.
+Scrolling is tracked natively; no JS scroll events are involved.
+
+A `GradientView` outside a `ScreenGradient` draws nothing (with a warning in development).
 
 ## Contributing
 

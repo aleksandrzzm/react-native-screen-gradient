@@ -123,8 +123,11 @@
     },
     "ios": {
       "components": {
-        "ScreenGradientView": {
-          "className": "ScreenGradientView"
+        "RNScreenGradient": {
+          "className": "RNScreenGradientComponentView"
+        },
+        "RNScreenGradientView": {
+          "className": "RNScreenGradientViewComponentView"
         }
       }
     }
