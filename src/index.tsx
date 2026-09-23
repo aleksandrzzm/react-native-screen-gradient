@@ -1,7 +1,11 @@
-export { ScreenGradient } from './ScreenGradient';
+export { GradientHost } from './GradientHost';
 export { GradientView } from './GradientView';
+export { GradientMaskSvg } from './GradientMaskSvg';
+export { Path } from './Path';
 export type {
+  GradientHostProps,
+  GradientMaskSvgProps,
   GradientPoint,
   GradientViewProps,
-  ScreenGradientProps,
+  PathProps,
 } from './types';

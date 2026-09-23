@@ -1,39 +1,37 @@
 import QuartzCore
 import UIKit
 
-/// Rendering core of `<GradientView>`.
-///
-/// Why one CAGradientLayer per GradientView: a CALayer can have only one superlayer and there is no
-/// public API to display one layer in several places (portal layers are private). Masking a single
-/// host-level layer would put the gradient outside the GradientView's z-order and clipping (it must
-/// sit below the GradientView's children, inside the scroll content, under overlapping siblings).
-///
-/// So each GradientView gets a layer node, but it is *not* an independent gradient: its bounds are
-/// the host's bounds, its colors/locations/start/end are the host's, and it is placed with the
-/// host→view affine transform. Every GradientView therefore shows a window into the same gradient,
-/// clipped to the view's own shape. Moving it is a pure Core Animation geometry change
-/// (no re-rasterization, implicit animations disabled).
-@objc(RNScreenGradientRenderer)
+@objc(RNGradientRenderer)
 public final class GradientRenderer: NSObject {
   private weak var ownerView: UIView?
-  private weak var host: ScreenGradientHost?
+  private weak var host: GradientHost?
 
-  /// Clips the gradient to the view's (rounded) bounds without clipping the view's children.
+  @objc public var hostName: String = GradientHost.defaultName {
+    didSet {
+      if hostName != oldValue {
+        resolveHost()
+      }
+    }
+  }
+
   private let clipLayer = CALayer()
   private let gradientLayer = CAGradientLayer()
+
+  private var pathMaskLayer: CALayer?
+  private var viewBox: CGRect?
 
   private var lastHostSize = CGSize.zero
   private var lastOrigin = CGPoint(x: CGFloat.nan, y: CGFloat.nan)
   private var lastTransform = CGAffineTransform.identity
 
-  /// Just above RCTViewComponentView's background color layer (-1024) and below its border layer.
   private static let zPosition: CGFloat = -1023.5
 
   private static let disabledActions: [String: CAAction] = [
     "bounds": NSNull(), "position": NSNull(), "transform": NSNull(), "anchorPoint": NSNull(),
     "colors": NSNull(), "locations": NSNull(), "startPoint": NSNull(), "endPoint": NSNull(),
     "frame": NSNull(), "cornerRadius": NSNull(), "path": NSNull(), "hidden": NSNull(),
-    "sublayers": NSNull(), "contents": NSNull(), "mask": NSNull(),
+    "sublayers": NSNull(), "contents": NSNull(), "mask": NSNull(), "sublayerTransform": NSNull(),
+    "lineWidth": NSNull(), "fillColor": NSNull(), "strokeColor": NSNull(),
   ]
 
   var view: UIView? { ownerView }
@@ -50,14 +48,8 @@ public final class GradientRenderer: NSObject {
     clipLayer.addSublayer(gradientLayer)
   }
 
-  // MARK: - Lifecycle, driven by the component view
-
   @objc public func viewDidMoveToWindow() {
-    guard let view = ownerView, view.window != nil else {
-      detachFromHost()
-      return
-    }
-    attachToHost()
+    resolveHost()
   }
 
   @objc public func viewDidLayout() {
@@ -67,10 +59,10 @@ public final class GradientRenderer: NSObject {
     }
     clipLayer.frame = view.layer.bounds
     clipLayer.mask?.frame = clipLayer.bounds
+    updateViewBoxTransform()
     updatePosition()
   }
 
-  /// Shape of the view's padding box. `path == nil` means a plain (optionally rounded) rect.
   @objc public func setClip(cornerRadius: CGFloat, cornerCurve: CALayerCornerCurve, path: CGPath?) {
     clipLayer.cornerRadius = path == nil ? cornerRadius : 0
     clipLayer.cornerCurve = cornerCurve
@@ -85,19 +77,66 @@ public final class GradientRenderer: NSObject {
     }
   }
 
+  @objc public func setMaskPaths(_ data: [NSNumber], viewBox box: [NSNumber]) {
+    let container = pathMaskLayer ?? CALayer()
+    container.actions = Self.disabledActions
+    container.sublayers = SvgPathDecoder.decode(data.map { CGFloat(truncating: $0) }).map { item in
+      let shape = CAShapeLayer()
+      shape.actions = Self.disabledActions
+      shape.path = item.path
+      shape.fillRule = item.evenOdd ? .evenOdd : .nonZero
+      shape.fillColor = item.fill ? UIColor.black.cgColor : nil
+      shape.strokeColor = item.stroke ? UIColor.black.cgColor : nil
+      shape.lineWidth = item.strokeWidth
+      shape.lineCap = item.lineCap
+      shape.lineJoin = item.lineJoin
+      shape.miterLimit = item.miterLimit
+      return shape
+    }
+    pathMaskLayer = container
+    clipLayer.mask = container
+    container.frame = clipLayer.bounds
+
+    if box.count == 4, box[2].doubleValue > 0, box[3].doubleValue > 0 {
+      viewBox = CGRect(
+        x: box[0].doubleValue, y: box[1].doubleValue,
+        width: box[2].doubleValue, height: box[3].doubleValue)
+    } else {
+      viewBox = nil
+    }
+    updateViewBoxTransform()
+  }
+
+  private func updateViewBoxTransform() {
+    guard let container = pathMaskLayer else { return }
+    let bounds = clipLayer.bounds
+    guard let box = viewBox, bounds.width > 0, bounds.height > 0 else {
+      container.sublayerTransform = CATransform3DIdentity
+      return
+    }
+    let scale = min(bounds.width / box.width, bounds.height / box.height)
+    var transform = CGAffineTransform(
+      translationX: (bounds.width - box.width * scale) / 2,
+      y: (bounds.height - box.height * scale) / 2)
+    transform = transform.scaledBy(x: scale, y: scale)
+    transform = transform.translatedBy(x: -box.minX, y: -box.minY)
+    container.sublayerTransform = CATransform3DMakeAffineTransform(transform)
+  }
+
   @objc public func prepareForRecycle() {
     detachFromHost()
   }
 
-  // MARK: - Host
-
-  private func attachToHost() {
-    guard let view = ownerView else { return }
+  @objc public func resolveHost() {
+    guard let view = ownerView, view.window != nil else {
+      detachFromHost()
+      return
+    }
     var current = view.superview
-    var found: ScreenGradientHost?
+    var found: GradientHost?
     while let candidate = current {
-      if let hosting = candidate as? ScreenGradientHosting {
-        found = hosting.screenGradientHost
+      if let hosting = candidate as? GradientHosting, hosting.gradientHost.name == hostName {
+        found = hosting.gradientHost
         break
       }
       current = candidate.superview
@@ -108,7 +147,6 @@ public final class GradientRenderer: NSObject {
     }
     detachFromHost()
     guard let found else {
-      // Not inside a ScreenGradient: draw nothing (the JS layer warns in development).
       return
     }
     host = found
@@ -130,14 +168,10 @@ public final class GradientRenderer: NSObject {
     guard let host else { return }
     gradientLayer.colors = host.cgColors
     gradientLayer.locations = host.locations
-    // CAGradientLayer's unit coordinates are relative to its bounds, which are the host's bounds,
-    // so the host-viewport fractions from JS map 1:1.
     gradientLayer.startPoint = host.startPoint
     gradientLayer.endPoint = host.endPoint
   }
 
-  /// Places the gradient layer so that host-viewport point P is drawn at the view-local point
-  /// where P physically is: layer transform = (host → view) affine map.
   func updatePosition() {
     guard let view = ownerView, let host, let hostView = host.view, view.window != nil else {
       return
@@ -149,8 +183,6 @@ public final class GradientRenderer: NSObject {
       return
     }
 
-    // Three host points are enough to recover the full affine host→view mapping, including
-    // scroll offsets, nested scroll views, layout offsets and transforms (e.g. inverted lists).
     let origin = hostView.convert(bounds.origin, to: view)
     let xAxis = hostView.convert(CGPoint(x: bounds.minX + size.width, y: bounds.minY), to: view)
     let yAxis = hostView.convert(CGPoint(x: bounds.minX, y: bounds.minY + size.height), to: view)
@@ -162,7 +194,6 @@ public final class GradientRenderer: NSObject {
       tx: 0,
       ty: 0
     )
-    // clipLayer shares the view's bounds origin, so view coordinates are clip-layer coordinates.
     let position = CGPoint(x: origin.x - view.bounds.minX, y: origin.y - view.bounds.minY)
 
     if size != lastHostSize {
@@ -178,5 +209,77 @@ public final class GradientRenderer: NSObject {
       lastTransform = transform
     }
     clipLayer.isHidden = false
+  }
+}
+
+enum SvgPathDecoder {
+  struct Item {
+    let path: CGPath
+    let fill: Bool
+    let evenOdd: Bool
+    let stroke: Bool
+    let strokeWidth: CGFloat
+    let lineCap: CAShapeLayerLineCap
+    let lineJoin: CAShapeLayerLineJoin
+    let miterLimit: CGFloat
+  }
+
+  private static let headerLength = 6
+  private static let caps: [CAShapeLayerLineCap] = [.butt, .round, .square]
+  private static let joins: [CAShapeLayerLineJoin] = [.miter, .round, .bevel]
+
+  static func decode(_ data: [CGFloat]) -> [Item] {
+    var items: [Item] = []
+    var i = 0
+    while i + headerLength <= data.count {
+      let flags = Int(data[i])
+      let strokeWidth = data[i + 1]
+      let cap = caps[safe: Int(data[i + 2])] ?? .butt
+      let join = joins[safe: Int(data[i + 3])] ?? .miter
+      let miterLimit = data[i + 4]
+      let end = min(data.count, i + headerLength + Int(data[i + 5]))
+      i += headerLength
+
+      let path = CGMutablePath()
+      commands: while i < end {
+        switch Int(data[i]) {
+        case 0 where i + 2 < end:
+          path.move(to: CGPoint(x: data[i + 1], y: data[i + 2]))
+          i += 3
+        case 1 where i + 2 < end:
+          path.addLine(to: CGPoint(x: data[i + 1], y: data[i + 2]))
+          i += 3
+        case 2 where i + 6 < end:
+          path.addCurve(
+            to: CGPoint(x: data[i + 5], y: data[i + 6]),
+            control1: CGPoint(x: data[i + 1], y: data[i + 2]),
+            control2: CGPoint(x: data[i + 3], y: data[i + 4]))
+          i += 7
+        case 3:
+          path.closeSubpath()
+          i += 1
+        default:
+          break commands
+        }
+      }
+      i = end
+      items.append(
+        Item(
+          path: path,
+          fill: flags & 1 != 0,
+          evenOdd: flags & 2 != 0,
+          stroke: flags & 4 != 0,
+          strokeWidth: strokeWidth,
+          lineCap: cap,
+          lineJoin: join,
+          miterLimit: miterLimit))
+    }
+    return items
+  }
+}
+
+extension Array {
+  fileprivate subscript(safe index: Int) -> Element? {
+    indices.contains(index) ? self[index] : nil
   }
 }

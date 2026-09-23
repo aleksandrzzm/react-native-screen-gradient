@@ -123,11 +123,14 @@
     },
     "ios": {
       "components": {
-        "RNScreenGradient": {
-          "className": "RNScreenGradientComponentView"
+        "RNGradientHost": {
+          "className": "RNGradientHostComponentView"
         },
-        "RNScreenGradientView": {
-          "className": "RNScreenGradientViewComponentView"
+        "RNGradientView": {
+          "className": "RNGradientViewComponentView"
+        },
+        "RNGradientMaskSvg": {
+          "className": "RNGradientMaskSvgComponentView"
         }
       }
     }

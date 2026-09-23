@@ -1,16 +1,15 @@
-import { useContext, useEffect } from 'react';
 import NativeGradientView from './GradientViewNativeComponent';
-import { ScreenGradientContext } from './ScreenGradientContext';
+import {
+  DEFAULT_HOST_NAME,
+  useMissingHostWarning,
+} from './GradientHostContext';
 import type { GradientViewProps } from './types';
 
-export function GradientView(props: GradientViewProps) {
-  const insideScreenGradient = useContext(ScreenGradientContext);
+export function GradientView({
+  hostName = DEFAULT_HOST_NAME,
+  ...rest
+}: GradientViewProps) {
+  useMissingHostWarning('GradientView', hostName);
 
-  useEffect(() => {
-    if (__DEV__ && !insideScreenGradient) {
-      console.warn('GradientView must be inside ScreenGradient.');
-    }
-  }, [insideScreenGradient]);
-
-  return <NativeGradientView {...props} />;
+  return <NativeGradientView {...rest} hostName={hostName} />;
 }
